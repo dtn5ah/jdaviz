@@ -204,27 +204,45 @@ def mos_spec2d_parser(app, data_obj, data_labels=None, add_to_table=True,
 
         return SpectralCube(new_data, wcs=wcs, meta=meta)
 
-    if _check_is_file(data_obj):
-        data_obj = [_parse_as_cube(data_obj)]
-
+    # If we're given a string, repeat it for each object
     if isinstance(data_labels, str):
-        data_labels = [data_labels]
+        data_labels = [f"{data_labels} {i}" for i in range(len(data_obj))]
 
     # Coerce into list-like object
     if not isinstance(data_obj, (list, set)):
         data_obj = [data_obj]
-    else:
-        data_obj = [_parse_as_cube(x)
-                    if _check_is_file(x) else x
-                    for x in data_obj]
 
-    if data_labels is None:
-        data_labels = [f"2D Spectrum {i}" for i in range(len(data_obj))]
-    elif len(data_obj) != len(data_labels):
-        data_labels = [f"{data_labels} {i}" for i in range(len(data_obj))]
+    for index, data in enumerate(data_obj):
+        # If we got a filepath, try to open it the ways we know how
+        if _check_is_file(data):
+            try:
+                data = Spectrum1D.read(data)
+            except IORegistryError:
+                try:
+                    data = SpectrumList.read(data)
+                    return mos_spec2d_parser(app, data, data_labels, add_to_table, show_in_viewer)
+                except IORegistryError:
+                    data = _parse_as_cube(data)
+        # If not, let's try to load it directly and see if
+        # Glue-Astronomy has a translator for it
 
-    for i in range(len(data_obj)):
-        app.data_collection[data_labels[i]] = data_obj[i]
+        # Initialize error var in case we get one so we can send it upstream
+        e = None
+        # Clear the previous label
+        label = None
+        # Get the corresponding label for this data product
+        try:
+            label = data_labels[index]
+        except Exception as e:
+            if type(e) is IndexError:
+                # If we only ever got one label, duplicate it with the index
+                if len(data_labels) == 1:
+                    label = f"{data_labels} {index}"
+
+        if not label:
+            label = f"2D Spectrum {index}"
+
+        app.data_collection[label] = data
 
     if show_in_viewer:
         if len(data_labels) > 1:
@@ -234,6 +252,10 @@ def mos_spec2d_parser(app, data_obj, data_labels=None, add_to_table=True,
 
     if add_to_table:
         _add_to_table(app, data_labels, '2D Spectra')
+
+    # If we got an error, send it upstream to notify the user
+    if e:
+        return e
 
 
 @data_parser_registry("mosviz-image-parser")
